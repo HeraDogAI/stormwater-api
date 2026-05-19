@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FL Stormwater Compliance Assistant</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --green-dark:   #0a3d2e;
+      --green-mid:    #145c42;
+      --green-accent: #1fad72;
+      --green-light:  #b6f0d8;
+      --sand:         #f5f0e8;
+      --sand-dark:    #e8e0d0;
+      --ink:          #0d1f17;
+      --mist:         #dff2eb;
+      --warn:         #e07b2a;
+      --radius:       6px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      font-family: 'DM Sans', sans-serif;
+      background: var(--sand);
+      color: var(--ink);
+      overflow: hidden;
+    }
+
+    /* ── LAYOUT ── */
+    #shell {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 260px 1fr;
+      height: 100dvh;
+    }
+
+    /* ── HEADER ── */
+    header {
+      grid-column: 1 / -1;
+      background: var(--green-dark);
+      color: var(--green-light);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      height: 56px;
+      border-bottom: 1px solid var(--green-mid);
+    }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .logo-mark {
+      width: 32px; height: 32px;
+      background: var(--green-accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .header-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #fff;
+    }
+    .header-sub {
+      font-size: 11px;
+      color: var(--green-light);
+      font-family: 'DM Mono', monospace;
+      letter-spacing: 0.05em;
+    }
+    .header-badge {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 3px 10px;
+      border: 1px solid var(--green-mid);
+      border-radius: 99px;
+      color: var(--green-light);
+      letter-spacing: 0.08em;
+    }
+
+    /* ── SIDEBAR ── */
+    aside {
+      background: var(--green-dark);
+      border-right: 1px solid var(--green-mid);
+      padding: 16px 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sidebar-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      color: var(--green-accent);
+      padding: 8px 18px 4px;
+      text-transform: uppercase;
+    }
+    .quick-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      padding: 9px 18px;
+      font-size: 12px;
+      color: #a8d4c0;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      line-height: 1.4;
+      font-family: 'DM Sans', sans-serif;
+    }
+    .quick-btn:hover {
+      background: rgba(31,173,114,0.12);
+      color: var(--green-light);
+    }
+    .quick-btn .q-icon { margin-right: 6px; font-size: 11px; opacity: 0.7; }
+
+    .sidebar-divider {
+      height: 1px;
+      background: var(--green-mid);
+      margin: 8px 18px;
+    }
+
+    .context-section { padding: 12px 18px; }
+    .ctx-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      color: var(--green-accent);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .ctx-select {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: 'DM Sans', sans-serif;
+      background: var(--green-mid);
+      border: 1px solid rgba(31,173,114,0.3);
+      border-radius: var(--radius);
+      color: var(--green-light);
+      margin-bottom: 8px;
+      outline: none;
+      cursor: pointer;
+    }
+    .ctx-select:focus { border-color: var(--green-accent); }
+    .ctx-select option { background: var(--green-dark); }
+
+    /* ── MAIN CHAT ── */
+    main {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--sand);
+    }
+
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scroll-behavior: smooth;
+    }
+
+    /* welcome state */
+    .welcome {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      text-align: center;
+      padding: 40px 20px;
+      gap: 12px;
+      animation: fadeUp 0.5s ease both;
+    }
+    .welcome-icon { font-size: 40px; }
+    .welcome h2 {
+      font-family: 'Syne', sans-serif;
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--green-dark);
+    }
+    .welcome p {
+      font-size: 14px;
+      color: #4a6b5c;
+      max-width: 380px;
+      line-height: 1.6;
+    }
+    .welcome-chips {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      justify-content: center; margin-top: 8px;
+    }
+    .w-chip {
+      font-size: 12px; padding: 6px 14px;
+      border-radius: 99px;
+      border: 1px solid var(--green-accent);
+      background: var(--mist);
+      color: var(--green-dark);
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: 'DM Sans', sans-serif;
+    }
+    .w-chip:hover { background: var(--green-accent); color: #fff; }
+
+    /* messages */
+    .msg { display: flex; gap: 10px; align-items: flex-start; animation: fadeUp 0.3s ease both; }
+    .msg.user { flex-direction: row-reverse; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .avatar {
+      width: 30px; height: 30px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600; flex-shrink: 0;
+      font-family: 'DM Mono', monospace;
+    }
+    .avatar.bot { background: var(--green-dark); color: var(--green-light); }
+    .avatar.user { background: var(--green-accent); color: #fff; }
+
+    .bubble {
+      max-width: min(72%, 600px);
+      padding: 12px 16px;
+      font-size: 14px;
+      line-height: 1.7;
+      border-radius: 4px 12px 12px 12px;
+    }
+    .bubble.bot {
+      background: #fff;
+      border: 1px solid var(--sand-dark);
+      color: var(--ink);
+      border-radius: 4px 12px 12px 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+    .bubble.user {
+      background: var(--green-dark);
+      color: var(--green-light);
+      border-radius: 12px 4px 12px 12px;
+    }
+    .bubble strong { font-weight: 600; color: var(--green-dark); }
+    .bubble.user strong { color: var(--green-light); }
+    .bubble ul { padding-left: 1.3rem; margin: 6px 0; }
+    .bubble li { margin-bottom: 4px; }
+    .bubble .flag {
+      display: inline-block;
+      margin-top: 10px;
+      font-size: 12px;
+      background: #fff8f0;
+      border: 1px solid #f0c898;
+      border-radius: 4px;
+      padding: 6px 10px;
+      color: var(--warn);
+    }
+    .bubble .reg-ref {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--green-accent);
+      background: var(--mist);
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+
+    .thinking {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; color: #6b8c7c;
+      font-family: 'DM Mono', monospace;
+      padding: 8px 0;
+    }
+    .dots span {
+      display: inline-block;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--green-accent);
+      animation: bounce 1.2s infinite;
+    }
+    .dots span:nth-child(2) { animation-delay: 0.2s; }
+    .dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%,80%,100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* ── INPUT BAR ── */
+    .input-bar {
+      padding: 12px 24px 16px;
+      background: var(--sand);
+      border-top: 1px solid var(--sand-dark);
+    }
+    .input-wrap {
+      display: flex;
+      gap: 8px;
+      background: #fff;
+      border: 1.5px solid var(--sand-dark);
+      border-radius: 10px;
+      padding: 6px 6px 6px 14px;
+      transition: border-color 0.2s;
+    }
+    .input-wrap:focus-within { border-color: var(--green-accent); }
+    #userInput {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 14px;
+      font-family: 'DM Sans', sans-serif;
+      background: transparent;
+      color: var(--ink);
+      resize: none;
+      max-height: 120px;
+      line-height: 1.5;
+    }
+    #userInput::placeholder { color: #9ab8ac; }
+    #sendBtn {
+      width: 36px; height: 36px;
+      background: var(--green-dark);
+      border: none;
+      border-radius: 7px;
+      color: #fff;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      transition: background 0.15s, transform 0.1s;
+      flex-shrink: 0;
+    }
+    #sendBtn:hover { background: var(--green-accent); }
+    #sendBtn:active { transform: scale(0.95); }
+    #sendBtn:disabled { background: var(--sand-dark); cursor: not-allowed; }
+
+    .input-meta {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 6px; padding: 0 2px;
+    }
+    .input-meta-left { font-size: 11px; color: #9ab8ac; font-family: 'DM Mono', monospace; }
+    .input-meta-right { font-size: 11px; color: #9ab8ac; }
+
+    /* ── FOOTER ── */
+    footer {
+      grid-column: 1 / -1;
+      background: var(--green-dark);
+      border-top: 1px solid var(--green-mid);
+      padding: 6px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-left { font-size: 10px; color: #6a9e85; font-family: 'DM Mono', monospace; }
+    .status-dot {
+      display: inline-block; width: 6px; height: 6px;
+      border-radius: 50%; background: var(--green-accent);
+      margin-right: 5px; animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .footer-right { font-size: 10px; color: #6a9e85; font-family: 'DM Mono', monospace; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 640px) {
+      #shell {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto auto;
+      }
+      aside {
+        grid-row: 4;
+        border-right: none;
+        border-top: 1px solid var(--green-mid);
+        flex-direction: row;
+        flex-wrap: wrap;
+        padding: 8px;
+        gap: 0;
+        overflow-x: auto;
+        max-height: 100px;
+      }
+      .sidebar-label, .sidebar-divider, .context-section { display: none; }
+      .quick-btn {
+        white-space: nowrap;
+        padding: 6px 12px;
+        font-size: 11px;
+        border: 1px solid var(--green-mid);
+        border-radius: 99px;
+        margin: 3px;
+      }
+      #chat { padding: 16px; }
+      .input-bar { padding: 10px 16px 12px; }
+      footer { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-left">
+      <div class="logo-mark">🌧</div>
+      <div>
+        <div class="header-title">Stormwater Compliance Assistant</div>
+        <div class="header-sub">FDEP · MS4 · NPDES · BMP · FLR10</div>
+      </div>
+    </div>
+    <div class="header-badge">FL · v1.1.0</div>
+  </header>
+
+  <!-- SIDEBAR -->
+  <aside>
+    <div class="sidebar-label">Context</div>
+    <div class="context-section">
+      <div class="ctx-label">County</div>
+      <select class="ctx-select" id="countySelect">
+        <option value="">— Select county —</option>
+        <option>Alachua</option><option>Bay</option><option>Brevard</option>
+        <option>Broward</option><option>Charlotte</option><option>Citrus</option>
+        <option>Clay</option><option>Collier</option><option>Columbia</option>
+        <option>DeSoto</option><option>Duval</option><option>Escambia</option>
+        <option>Flagler</option><option>Gadsden</option><option>Hardee</option>
+        <option>Hendry</option><option>Hernando</option><option>Highlands</option>
+        <option>Hillsborough</option><option>Indian River</option><option>Jackson</option>
+        <option>Lake</option><option>Lee</option><option>Leon</option>
+        <option>Levy</option><option>Madison</option><option>Manatee</option>
+        <option>Marion</option><option>Martin</option><option>Miami-Dade</option>
+        <option>Monroe</option><option>Nassau</option><option>Okaloosa</option>
+        <option>Okeechobee</option><option>Orange</option><option>Osceola</option>
+        <option>Palm Beach</option><option>Pasco</option><option>Pinellas</option>
+        <option>Polk</option><option>Putnam</option><option>Santa Rosa</option>
+        <option>Sarasota</option><option>Seminole</option><option>St. Johns</option>
+        <option>St. Lucie</option><option>Sumter</option><option>Suwannee</option>
+        <option>Taylor</option><option>Volusia</option><option>Wakulla</option>
+        <option>Walton</option><option>Washington</option>
+      </select>
+      <div class="ctx-label">Water Management District</div>
+      <select class="ctx-select" id="wmdSelect">
+        <option value="">— Select WMD —</option>
+        <option value="SFWMD">SFWMD — South Florida</option>
+        <option value="SJRWMD">SJRWMD — St. Johns River</option>
+        <option value="SWFWMD">SWFWMD — Southwest Florida</option>
+        <option value="NWFWMD">NWFWMD — Northwest Florida</option>
+        <option value="SRWMD">SRWMD — Suwannee River</option>
+      </select>
+    </div>
+
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-label">Quick Questions</div>
+
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What BMPs are required for a 5-acre construction site in Florida?"><span class="q-icon">🏗</span>BMPs for 5-acre site</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="Give me a complete SWPPP site inspection checklist for Florida."><span class="q-icon">📋</span>SWPPP inspection checklist</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What triggers an NPDES permit requirement in Florida?"><span class="q-icon">📄</span>NPDES permit triggers</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What are the MS4 Phase II annual report requirements in Florida?"><span class="q-icon">📊</span>MS4 annual report</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What BMPs should I use for a parking lot with stormwater runoff issues?"><span class="q-icon">🅿</span>Parking lot runoff BMPs</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="How deep should silt fence be trenched in Florida and what are the installation standards?"><span class="q-icon">🚧</span>Silt fence installation</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What are the inspection frequency requirements under the Florida FLR10 Construction General Permit?"><span class="q-icon">🔍</span>FLR10 inspection frequency</button>
+    <button class="quick-btn" onclick="ask(this.dataset.q)" data-q="What are the ERP stormwater treatment volume requirements under Chapter 62-330 F.A.C.?"><span class="q-icon">💧</span>ERP treatment volume</button>
+
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-label">Actions</div>
+    <button class="quick-btn" onclick="clearChat()"><span class="q-icon">🗑</span>Clear conversation</button>
+  </aside>
+
+  <!-- MAIN -->
+  <main>
+    <div id="chat">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🌧</div>
+        <h2>Florida Stormwater Compliance</h2>
+        <p>Ask me anything about FDEP permits, MS4 compliance, site inspections, or BMP selection. Set your county and WMD on the left for localized guidance.</p>
+        <div class="welcome-chips">
+          <button class="w-chip" onclick="ask('What BMPs are required for a 5-acre construction site in Florida?')">5-acre site BMPs</button>
+          <button class="w-chip" onclick="ask('Give me a SWPPP inspection checklist.')">SWPPP checklist</button>
+          <button class="w-chip" onclick="ask('What triggers an NPDES permit in Florida?')">NPDES triggers</button>
+          <button class="w-chip" onclick="ask('How deep should silt fence be trenched?')">Silt fence depth</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <div class="input-wrap">
+        <textarea id="userInput" rows="1" placeholder="Ask a compliance question…"></textarea>
+        <button id="sendBtn" onclick="handleSend()" title="Send">↑</button>
+      </div>
+      <div class="input-meta">
+        <span class="input-meta-left" id="ctxDisplay">No context set</span>
+        <span class="input-meta-right">Enter to send · Shift+Enter for new line</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="footer-left"><span class="status-dot"></span>stormwater-api-production.up.railway.app</div>
+    <div class="footer-right">Always verify against current FDEP regulations</div>
+  </footer>
+
+</div>
+
+<script>
+  const API_BASE = 'https://stormwater-api-production.up.railway.app';
+  const API_KEY  = 'YOUR_APP_API_KEY'; // Replace with your APP_API_KEY
+
+  let history = [];
+  let busy = false;
+
+  // ── Context display ──
+  const countyEl = document.getElementById('countySelect');
+  const wmdEl    = document.getElementById('wmdSelect');
+  const ctxEl    = document.getElementById('ctxDisplay');
+
+  function updateCtx() {
+    const c = countyEl.value, w = wmdEl.value;
+    ctxEl.textContent = (c || w)
+      ? `Context: ${[c, w].filter(Boolean).join(' · ')}`
+      : 'No context set — select county/WMD for localized guidance';
+  }
+  countyEl.addEventListener('change', updateCtx);
+  wmdEl.addEventListener('change', updateCtx);
+
+  // ── Auto-resize textarea ──
+  const input = document.getElementById('userInput');
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  });
+
+  // ── Append message ──
+  function appendMsg(role, html) {
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.remove();
+
+    const chat = document.getElementById('chat');
+    const div  = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = `
+      <div class="avatar ${role}">${role === 'user' ? 'YOU' : 'SW'}</div>
+      <div class="bubble ${role}">${html}</div>`;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
+
+  // ── Format bot reply ──
+  function fmt(text) {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<span class="reg-ref">$1</span>')
+      .replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>[\s\S]*?<\/li>)+/g, m => `<ul>${m}</ul>`)
+      .replace(/⚠️(.*)/g, '<span class="flag">⚠️$1</span>')
+      .replace(/\n{2,}/g, '<br><br>')
+      .replace(/\n/g, '<br>');
+  }
+
+  // ── Send ──
+  async function handleSend() {
+    if (busy) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.style.height = 'auto';
+    ask(text);
+  }
+
+  async function ask(text) {
+    if (busy) return;
+    busy = true;
+    document.getElementById('sendBtn').disabled = true;
+
+    appendMsg('user', text);
+
+    const thinkEl = document.getElementById('chat').appendChild(
+      Object.assign(document.createElement('div'), {
+        className: 'thinking',
+        innerHTML: `<div class="dots"><span></span><span></span><span></span></div> Analyzing regulations…`
+      })
+    );
+    document.getElementById('chat').scrollTop = 99999;
+
+    try {
+      const body = {
+        message: text,
+        history,
+        county: countyEl.value || undefined,
+        wmd:    wmdEl.value    || undefined,
+      };
+
+      const res  = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': API_KEY,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      thinkEl.remove();
+      appendMsg('bot', fmt(data.reply));
+      history = data.history;
+
+    } catch (err) {
+      thinkEl.remove();
+      appendMsg('bot', `<span style="color:#c0392b">⚠ Could not reach the API. Check your connection or API key.<br><small>${err.message}</small></span>`);
+    }
+
+    busy = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('chat').scrollTop = 99999;
+  }
+
+  function clearChat() {
+    history = [];
+    const chat = document.getElementById('chat');
+    chat.innerHTML = `
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🌧</div>
+        <h2>Florida Stormwater Compliance</h2>
+        <p>Ask me anything about FDEP permits, MS4 compliance, site inspections, or BMP selection.</p>
+        <div class="welcome-chips">
+          <button class="w-chip" onclick="ask('What BMPs are required for a 5-acre construction site in Florida?')">5-acre site BMPs</button>
+          <button class="w-chip" onclick="ask('Give me a SWPPP inspection checklist.')">SWPPP checklist</button>
+          <button class="w-chip" onclick="ask('What triggers an NPDES permit in Florida?')">NPDES triggers</button>
+          <button class="w-chip" onclick="ask('How deep should silt fence be trenched?')">Silt fence depth</button>
+        </div>
+      </div>`;
+  }
+</script>
+</body>
+</html>
