@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from typing import Optional
-import anthropic
+from openai import OpenAI
 import os
 
 app = FastAPI(
     title="Florida Stormwater Compliance Assistant API",
     description="AI-powered stormwater compliance guidance for Florida — FDEP, MS4, NPDES, SWPPP, and BMP selection.",
-    version="1.1.0"
+    version="1.2.0"
 )
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -23,7 +23,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key"],
 )
 
-# Optional API key auth — set APP_API_KEY env var to enable
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
@@ -47,7 +46,7 @@ Florida-specific guidance priorities:
 - Always reference FDEP permit numbers, rule chapters, and WMD basin criteria where applicable.
 - Note Outstanding Florida Waters (OFWs) and impaired water body constraints.
 - Account for Florida's unique hydrology: low gradients, high groundwater, karst, wet season (June-September) timing.
-- Reference FDEP's Stormwater Quality Handbook and FDOT Erosion & Sediment Control practices for BMP specifics.
+- Reference FDEP Stormwater Quality Handbook and FDOT Erosion & Sediment Control practices for BMP specifics.
 - Flag when a Water Management District (WMD) ERP may be required in addition to FDEP/NPDES permits.
 - Be specific, practical, and actionable. Use regulatory language correctly.
 - Keep responses concise (under 400 words unless complexity demands more).
@@ -62,8 +61,8 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: Optional[list[Message]] = []
-    county: Optional[str] = None   # e.g. "Brevard", "Miami-Dade"
-    wmd: Optional[str] = None      # e.g. "SFWMD", "SJRWMD", "SWFWMD"
+    county: Optional[str] = None
+    wmd: Optional[str] = None
 
 class ChatResponse(BaseModel):
     reply: str
@@ -72,12 +71,7 @@ class ChatResponse(BaseModel):
 
 @app.get("/")
 def root():
-    return {
-        "status": "ok",
-        "tool": "Florida Stormwater Compliance Assistant API",
-        "state": "FL",
-        "version": "1.1.0"
-    }
+    return {"status": "ok", "tool": "Florida Stormwater Compliance Assistant API", "state": "FL", "version": "1.2.0"}
 
 @app.get("/health")
 def health():
@@ -88,12 +82,12 @@ def topics():
     return {
         "state": "FL",
         "topics": [
-            {"id": "npdes",      "label": "NPDES / FLR10 CGP",    "description": "Construction general permit, NOI, SWPPP, inspections"},
-            {"id": "ms4",        "label": "MS4 Compliance",        "description": "Phase I/II MS4 permits, six MCMs, annual reports"},
-            {"id": "erp",        "label": "ERP Stormwater",        "description": "Chapter 62-330 F.A.C., treatment volume, attenuation"},
-            {"id": "inspection", "label": "Site Inspection",       "description": "FL inspection forms, frequencies, corrective actions"},
-            {"id": "bmp",        "label": "BMP Selection & Sizing","description": "Florida-specific BMPs for flat terrain, high water table"},
-            {"id": "wmd",        "label": "WMD Requirements",      "description": "SFWMD, SJRWMD, SWFWMD, NWFWMD, SRWMD basin rules"},
+            {"id": "npdes",      "label": "NPDES / FLR10 CGP",     "description": "Construction general permit, NOI, SWPPP, inspections"},
+            {"id": "ms4",        "label": "MS4 Compliance",         "description": "Phase I/II MS4 permits, six MCMs, annual reports"},
+            {"id": "erp",        "label": "ERP Stormwater",         "description": "Chapter 62-330 F.A.C., treatment volume, attenuation"},
+            {"id": "inspection", "label": "Site Inspection",        "description": "FL inspection forms, frequencies, corrective actions"},
+            {"id": "bmp",        "label": "BMP Selection & Sizing", "description": "Florida-specific BMPs for flat terrain, high water table"},
+            {"id": "wmd",        "label": "WMD Requirements",       "description": "SFWMD, SJRWMD, SWFWMD, NWFWMD, SRWMD basin rules"},
         ]
     }
 
@@ -111,39 +105,35 @@ def wmds():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, _: str = Depends(verify_api_key)):
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured.")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured.")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = OpenAI(api_key=api_key)
 
-    messages = [{"role": m.role, "content": m.content} for m in req.history]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in req.history:
+        messages.append({"role": m.role, "content": m.content})
 
-    # Build Florida-specific context prefix
     context_parts = ["[State: Florida]"]
     if req.county:
         context_parts.append(f"[County: {req.county}]")
     if req.wmd:
         context_parts.append(f"[WMD: {req.wmd}]")
     context = " ".join(context_parts)
-    user_content = f"{context} {req.message}"
-
-    messages.append({"role": "user", "content": user_content})
+    messages.append({"role": "user", "content": f"{context} {req.message}"})
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        response = client.chat.completions.create(
+            model="gpt-4o",
             messages=messages,
+            max_tokens=1024,
+            temperature=0.2,
         )
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {str(e)}")
 
-    reply_text = " ".join(
-        block.text for block in response.content if hasattr(block, "text")
-    ).strip()
+    reply_text = response.choices[0].message.content.strip()
 
     updated_history = req.history + [
         Message(role="user", content=req.message),
