@@ -12,12 +12,15 @@ app = FastAPI(
     version="1.1.0"
 )
 
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+allowed_origins = [o.strip() for o in allowed_origins]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("ALLOWED_ORIGINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 # Optional API key auth — set APP_API_KEY env var to enable
