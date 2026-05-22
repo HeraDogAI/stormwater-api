@@ -398,7 +398,7 @@
     <div class="header-left">
       <div class="logo-mark">🌧</div>
       <div>
-        <div class="header-title">Compliance Bot</div>
+        <div class="header-title">Stormwater Compliance Assistant</div>
         <div class="header-sub">FDEP · MS4 · NPDES · BMP · FLR10</div>
       </div>
     </div>
@@ -497,7 +497,7 @@
 
 <script>
   const API_BASE = 'https://stormwater-api-production.up.railway.app';
-  const API_KEY = 'swFL-2016-mF7xR3';
+  const API_KEY  = 'swFL-2016-mF7xR3'; // Replace with your APP_API_KEY
 
   let history = [];
   let busy = false;
@@ -601,7 +601,16 @@
       const data = await res.json();
 
       thinkEl.remove();
-      appendMsg('bot', fmt(data.reply));
+
+      // Show split-jurisdiction warning if present
+      if (data.split_jurisdiction_warning) {
+        const warnDiv = document.createElement("div");
+        warnDiv.style.cssText = "background:#fff8f0;border:1px solid #f0c898;border-radius:6px;padding:8px 14px;font-size:12px;color:#c07020;margin:0 38px 4px;";
+        warnDiv.innerHTML = data.split_jurisdiction_warning;
+        document.getElementById("chat").appendChild(warnDiv);
+      }
+
+      appendMsg("bot", fmt(data.reply));
       history = data.history;
 
     } catch (err) {
