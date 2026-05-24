@@ -4,12 +4,14 @@ from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from typing import Optional
 from openai import OpenAI
+from pinecone import Pinecone
+from langchain_openai import OpenAIEmbeddings
 import os
 
 app = FastAPI(
     title="Florida Stormwater Compliance Assistant API",
-    description="AI-powered stormwater compliance guidance for Florida — FDEP, MS4, NPDES, SWPPP, and BMP selection.",
-    version="1.3.0"
+    description="RAG-powered stormwater compliance guidance grounded in verified FL rule documents.",
+    version="2.0.0"
 )
 
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -33,57 +35,19 @@ def verify_api_key(key: Optional[str] = Security(api_key_header)):
     return key
 
 
-# ── KNOWN-VALID PERMIT & RULE REGISTRY ──────────────────────────────────────
+# ── KNOWN-VALID REGISTRIES ────────────────────────────────────────────────────
 VALID_PERMIT_CODES = {
     "FLR10": "FDEP NPDES Construction General Permit (CGP)",
     "FLR04": "FDEP MS4 Phase II Generic Permit",
     "FLR05": "FDEP Multi-Sector Generic Permit (MSGP) for Industrial Stormwater",
-    "FLR06": "FDEP Generic Permit for Discharges from Large and Small MS4s",
-    "FLR10E": "FDEP NPDES CGP for Earthmoving Activities",
+    "FLR06": "FDEP Generic Permit for Large and Small MS4s",
 }
 
 VALID_RULE_CHAPTERS = {
-    "62-25":  "Florida Stormwater Rule",
-    "62-302": "Surface Water Quality Standards",
-    "62-303": "Identification of Impaired Surface Waters",
-    "62-330": "Environmental Resource Permits (ERP)",
-    "62-521": "Management and Storage of Surface Waters",
-    "62-621": "Generic Permits for Stormwater Discharge",
-    "62-624": "MS4 Permit Rule",
-    "62-640": "Wastewater Facilities",
-    "40 CFR 122": "Federal NPDES Permit Regulations",
-    "40 CFR 123": "State Program Requirements",
+    "62-25", "62-302", "62-303", "62-330", "62-521",
+    "62-621", "62-624", "62-640", "40 CFR 122", "40 CFR 123",
 }
 
-# ── VERIFIED FLORIDA-SPECIFIC NUMERICAL THRESHOLDS ───────────────────────────
-FL_VERIFIED_THRESHOLDS = """
-VERIFIED FLORIDA NUMERICAL THRESHOLDS (use ONLY these — never substitute federal EPA CGP values):
-
-FLR10 Construction General Permit (FDEP, effective 02/2015):
-- Routine inspection frequency: Once every 7 calendar days
-- Post-storm inspection trigger: Within 24 hours after any storm event of 0.5 inches or greater (NOT 0.25" — that is the federal EPA CGP threshold)
-- Inspection citation: Part 4.6 of FLR10 (NOT Part 4.2.1)
-- Stabilization: 14 days after last disturbance (7 days for high-quality waters)
-- Sediment basin: Required when disturbed area drains to a common point at 5+ acres
-
-ERP Stormwater Treatment (Chapter 62-330 F.A.C. — STATEWIDE HARMONIZED):
-- Water quality treatment volume: First 1 inch of runoff OR 2.5 inches × percent impervious (whichever greater)
-- OFW discharge: 50% increase — 1.5 inches OR 3.75 inches × percent impervious
-- Wet detention residence time: 14 days (mean wet season) — THIS IS STATEWIDE, same for ALL WMDs
-- Littoral zone: 35% of normal pool area — STATEWIDE, same for ALL WMDs (not 30%, not 21-day for any specific WMD)
-- Attenuation: Discharge rate must not exceed pre-development rate for 25-year, 24-hour storm
-
-MS4 Phase II (FLR04 / Chapter 62-624 F.A.C.):
-- Six minimum control measures (MCMs): Public education, public participation, illicit discharge detection, construction site runoff, post-construction runoff, pollution prevention/good housekeeping
-- Annual report required
-
-Silt Fence Installation:
-- Trench depth: 6 inches minimum (some states 8", Florida standard is 6")
-- Toe kickout: 2-4 inches upslope before backfilling
-- Standard: ASTM D6462
-"""
-
-# ── SPLIT-JURISDICTION COUNTIES ───────────────────────────────────────────────
 SPLIT_JURISDICTION_COUNTIES = {
     "Marion":  "Primarily SJRWMD, but southwestern portion near Dunnellon falls under SWFWMD.",
     "Polk":    "Split between SFWMD (southern) and SWFWMD (northern).",
@@ -92,58 +56,115 @@ SPLIT_JURISDICTION_COUNTIES = {
     "Alachua": "Primarily SRWMD with partial SJRWMD overlap.",
 }
 
+PINECONE_INDEX = "stormwater-fl"
+TOP_K_CHUNKS   = 5  # Number of document chunks to retrieve per query
+
+
+# ── RAG RETRIEVAL ─────────────────────────────────────────────────────────────
+def retrieve_context(query: str, openai_key: str, pinecone_key: str) -> tuple[str, list[str]]:
+    """
+    Embed the query, search Pinecone, return (context_text, source_list).
+    Falls back gracefully if Pinecone is not configured or index is empty.
+    """
+    if not pinecone_key:
+        return "", []
+
+    try:
+        embeddings = OpenAIEmbeddings(api_key=openai_key, model="text-embedding-3-small")
+        query_vector = embeddings.embed_query(query)
+
+        pc    = Pinecone(api_key=pinecone_key)
+        index = pc.Index(PINECONE_INDEX)
+        results = index.query(vector=query_vector, top_k=TOP_K_CHUNKS, include_metadata=True)
+
+        if not results.matches:
+            return "", []
+
+        chunks  = []
+        sources = []
+        for match in results.matches:
+            if match.score > 0.70:  # Only use high-confidence matches
+                chunks.append(match.metadata.get("text", ""))
+                source = match.metadata.get("source", "Unknown source")
+                chunk_num = match.metadata.get("chunk", "?")
+                if source not in sources:
+                    sources.append(source)
+
+        context = "\n\n---\n\n".join(chunks)
+        return context, sources
+
+    except Exception as e:
+        # Graceful fallback — API still works without RAG
+        print(f"RAG retrieval error: {e}")
+        return "", []
+
+
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = f"""You are an expert stormwater compliance specialist focused on Florida regulations. You help professionals with MS4/NPDES permits, site inspections, and BMP selection.
+BASE_SYSTEM_PROMPT = """You are an expert stormwater compliance specialist for Florida. You answer questions about MS4/NPDES permits, site inspections, and BMP selection.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CRITICAL OPERATING RULES — FOLLOW WITHOUT EXCEPTION
+CRITICAL RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. PERMIT CODE VERIFICATION
-Valid Florida permit codes: {', '.join(VALID_PERMIT_CODES.keys())}
-Valid rule chapters: {', '.join(VALID_RULE_CHAPTERS.keys())}
-If a user references ANY permit code or rule chapter NOT in these lists, you MUST respond:
-"I don't recognize [X] as a valid Florida permit or rule citation. Valid Florida stormwater permits include FLR10, FLR04, FLR05. Could you double-check the reference? I won't elaborate on unverified citations."
+1. SOURCE GROUNDING
+When RETRIEVED DOCUMENT SECTIONS are provided, you MUST base your answer on them.
+Always cite the source document in your answer: "According to [Source Name]..."
+If retrieved sections don't cover the question, say so and answer from verified knowledge only.
 
-2. NEVER ACCEPT FABRICATED PREMISES
-If a user states a rule, threshold, or permit code as fact, verify it against your knowledge before confirming. If it conflicts with verified Florida thresholds, say so directly:
-"The threshold you've mentioned doesn't match the verified Florida requirement. The correct value is [X] per [source]."
+2. PERMIT CODE VERIFICATION
+Valid Florida permits: FLR10, FLR04, FLR05, FLR06.
+Valid rule chapters: 62-25, 62-302, 62-303, 62-330, 62-521, 62-621, 62-624, 40 CFR 122/123.
+If a user references any permit or rule NOT in these lists, refuse and flag it:
+"I don't recognize [X] as a valid Florida stormwater permit or rule. I won't elaborate on unverified citations."
 
-3. FLORIDA VALUES ONLY — NEVER USE FEDERAL EPA CGP VALUES
-{FL_VERIFIED_THRESHOLDS}
+3. NEVER ACCEPT FABRICATED PREMISES
+If a user states a threshold or rule as fact that conflicts with verified Florida requirements, correct them directly:
+"The value you've mentioned doesn't match verified Florida requirements. The correct value is [X]."
 
-4. WMD DESIGN CRITERIA ARE STATEWIDE HARMONIZED
-Under Chapter 62-330 F.A.C., ERP design criteria (wet detention residence time, littoral zone %) are largely STATEWIDE and apply equally to all WMDs. Do NOT invent WMD-specific differences unless you can specifically cite the WMD's Applicant's Handbook with a real section number. If you don't have a verified section number, say "verify in the current WMD Applicant's Handbook" rather than fabricating one.
+4. VERIFIED FLORIDA THRESHOLDS (never substitute federal EPA CGP values):
+- FLR10 post-storm inspection: 0.5 inches (NOT 0.25" — that is the federal EPA CGP)
+- FLR10 inspection citation: Part 4.6 (NOT Part 4.2.1)
+- ERP wet detention residence time: 14 days — STATEWIDE for ALL WMDs
+- ERP littoral zone: 35% of normal pool — STATEWIDE for ALL WMDs
+- OFW treatment volume: 1.5" or 3.75 × impervious (50% increase over standard)
+- Stabilization: 14 days standard, 7 days for high-quality waters
+- Sediment basin: Required at 10+ disturbed acres draining to common point — 3,600 cubic feet of storage per acre drained (Part 5.6 FLR10). For less than 10 acres, sediment basins are recommended but NOT required.
 
-5. SPLIT-JURISDICTION COUNTIES
-These counties have dual WMD jurisdiction — always flag this:
-{chr(10).join(f"- {county}: {note}" for county, note in SPLIT_JURISDICTION_COUNTIES.items())}
+5. WMD CRITERIA ARE STATEWIDE HARMONIZED
+Do NOT invent WMD-specific differences under Chapter 62-330 F.A.C. unless citing a verified section from the WMD's Applicant's Handbook.
 
 6. CITATION DISCIPLINE
-Only cite section numbers you are confident exist. If unsure of the exact section, say "See the [document name] — verify the current section number in the official document." Never fabricate a section number to appear authoritative.
+Only cite section numbers confirmed in retrieved documents or verified knowledge.
+Never fabricate a section number. If unsure, say "verify the current section in [document name]."
 
-7. CONFIDENCE TIERS — Always indicate which tier applies:
-- FRAMEWORK/DEFINITIONAL: High confidence — established regulatory structure
-- NUMERICAL THRESHOLDS: Cite the verified threshold above; flag if user should verify against source document
-- ENGINEERING DESIGN: Always recommend verification with a licensed engineer and the current WMD Applicant's Handbook
+7. CONFIDENCE TIERS — label every response:
+🟢 FRAMEWORK: Established regulatory structure — high confidence
+🟡 THRESHOLD: Numerical value — verify against source document
+🔴 ENGINEERING: Site-specific design — requires licensed engineer review
 
-8. MANDATORY DISCLAIMER on every response:
-End every response with: "⚠ Verify all citations, permit numbers, and thresholds against the current source document before relying on this for compliance work."
+8. End every response with:
+"⚠ Verify all citations, permit numbers, and thresholds against the current source document before relying on this for compliance work."
+"""
+
+def build_system_prompt(context: str, sources: list[str]) -> str:
+    if not context:
+        return BASE_SYSTEM_PROMPT + "\n\n[No document sections retrieved — answering from verified knowledge only.]"
+
+    source_list = "\n".join(f"  - {s}" for s in sources)
+    return BASE_SYSTEM_PROMPT + f"""
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SCOPE
+RETRIEVED DOCUMENT SECTIONS
+Sources: 
+{source_list}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- FLR10 CGP: NOI, SWPPP, inspection frequencies, NOT procedures
-- MS4 Phase II (FLR04): Six MCMs, annual reports, TMDL compliance
-- ERP (Chapter 62-330 F.A.C.): Treatment volume, attenuation, water quality
-- Site inspections: FL-specific forms, QSI requirements, corrective action timelines
-- BMP selection: Florida conditions (flat topography, sandy soils, high water table, karst)
-- WMD rules: SFWMD, SJRWMD, SWFWMD, NWFWMD, SRWMD
-
-Keep responses concise (under 400 words unless complexity demands more).
+{context}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Base your answer on the retrieved sections above. Cite the source by name.
 """
 
 
+# ── MODELS ────────────────────────────────────────────────────────────────────
 class Message(BaseModel):
     role: str
     content: str
@@ -157,16 +178,20 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     history: list[Message]
+    sources: list[str] = []
     split_jurisdiction_warning: Optional[str] = None
+    rag_active: bool = False
 
 
+# ── ROUTES ────────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "tool": "Florida Stormwater Compliance Assistant API", "state": "FL", "version": "1.3.0"}
+    return {"status": "ok", "tool": "Florida Stormwater Compliance Assistant API", "state": "FL", "version": "2.0.0", "rag": True}
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    pinecone_configured = bool(os.environ.get("PINECONE_API_KEY"))
+    return {"status": "healthy", "rag_enabled": pinecone_configured}
 
 @app.get("/topics")
 def topics():
@@ -196,37 +221,47 @@ def wmds():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, _: str = Depends(verify_api_key)):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    openai_key   = os.environ.get("OPENAI_API_KEY")
+    pinecone_key = os.environ.get("PINECONE_API_KEY", "")
+
+    if not openai_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured.")
 
-    client = OpenAI(api_key=api_key)
-
-    # Check for split-jurisdiction county warning
+    # Split-jurisdiction warning
     split_warning = None
     if req.county and req.county in SPLIT_JURISDICTION_COUNTIES:
         split_warning = f"⚠ {req.county} County has dual WMD jurisdiction: {SPLIT_JURISDICTION_COUNTIES[req.county]}"
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for m in req.history:
-        messages.append({"role": m.role, "content": m.content})
-
+    # Build context prefix
     context_parts = ["[State: Florida]"]
     if req.county:
         context_parts.append(f"[County: {req.county}]")
         if split_warning:
-            context_parts.append(f"[WARNING: Split jurisdiction county — {SPLIT_JURISDICTION_COUNTIES[req.county]}]")
+            context_parts.append(f"[WARNING: Split jurisdiction — {SPLIT_JURISDICTION_COUNTIES[req.county]}]")
     if req.wmd:
         context_parts.append(f"[WMD: {req.wmd}]")
-    context = " ".join(context_parts)
-    messages.append({"role": "user", "content": f"{context} {req.message}"})
+    context_prefix = " ".join(context_parts)
+    full_query = f"{context_prefix} {req.message}"
 
+    # ── RAG retrieval ──
+    retrieved_context, sources = retrieve_context(full_query, openai_key, pinecone_key)
+    rag_active = bool(retrieved_context)
+
+    # ── Build messages ──
+    system_prompt = build_system_prompt(retrieved_context, sources)
+    messages = [{"role": "system", "content": system_prompt}]
+    for m in req.history:
+        messages.append({"role": m.role, "content": m.content})
+    messages.append({"role": "user", "content": full_query})
+
+    # ── Call OpenAI ──
+    client = OpenAI(api_key=openai_key)
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
             max_tokens=1024,
-            temperature=0.1,  # Lower temp = more conservative, less fabrication
+            temperature=0.1,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"OpenAI API error: {str(e)}")
@@ -241,5 +276,7 @@ async def chat(req: ChatRequest, _: str = Depends(verify_api_key)):
     return ChatResponse(
         reply=reply_text,
         history=updated_history,
+        sources=sources,
         split_jurisdiction_warning=split_warning,
+        rag_active=rag_active,
     )
