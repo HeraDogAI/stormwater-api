@@ -497,7 +497,7 @@
 
 <script>
   const API_BASE = 'https://stormwater-api-production.up.railway.app';
-  const API_KEY  = 'swFL-2016-mF7xR3'; // Replace with your APP_API_KEY
+  const API_KEY  = 'YOUR_APP_API_KEY'; // Replace with your APP_API_KEY
 
   let history = [];
   let busy = false;
@@ -602,12 +602,34 @@
 
       thinkEl.remove();
 
-      // Show split-jurisdiction warning if present
-      if (data.split_jurisdiction_warning) {
+      // Show split-jurisdiction warning — from API field OR county dropdown
+      const splitCounties = ["Marion", "Polk", "Levy", "Citrus", "Alachua"];
+      const selectedCounty = document.getElementById('countySelect').value;
+      const warningText = data.split_jurisdiction_warning ||
+        (splitCounties.includes(selectedCounty)
+          ? `⚠ ${selectedCounty} County has dual WMD jurisdiction — verify which district covers your specific project site.`
+          : null);
+
+      if (warningText) {
         const warnDiv = document.createElement("div");
         warnDiv.style.cssText = "background:#fff8f0;border:1px solid #f0c898;border-radius:6px;padding:8px 14px;font-size:12px;color:#c07020;margin:0 38px 4px;";
-        warnDiv.innerHTML = data.split_jurisdiction_warning;
+        warnDiv.innerHTML = warningText;
         document.getElementById("chat").appendChild(warnDiv);
+      }
+
+      // Show sources bar
+      const chat = document.getElementById("chat");
+      if (data.sources && data.sources.length > 0) {
+        const srcDiv = document.createElement("div");
+        srcDiv.className = "sources-bar";
+        const srcText = data.sources.map(s => `<span>📄 ${s}</span>`).join(" · ");
+        srcDiv.innerHTML = `<span class="src-label">Sources:</span> ${srcText} <span class="rag-badge">RAG ✓</span>`;
+        chat.appendChild(srcDiv);
+      } else {
+        const noRagDiv = document.createElement("div");
+        noRagDiv.className = "sources-bar";
+        noRagDiv.innerHTML = `<span class="src-label">Source:</span> <span>Verified knowledge base</span> <span class="no-rag-badge">No docs loaded</span>`;
+        chat.appendChild(noRagDiv);
       }
 
       appendMsg("bot", fmt(data.reply));
