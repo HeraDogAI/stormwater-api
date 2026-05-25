@@ -57,7 +57,7 @@ SPLIT_JURISDICTION_COUNTIES = {
 }
 
 PINECONE_INDEX = "stormwater-fl"
-TOP_K_CHUNKS   = 5  # Number of document chunks to retrieve per query
+TOP_K_CHUNKS   = 6  # Number of document chunks to retrieve per query
 
 
 # ── RAG RETRIEVAL ─────────────────────────────────────────────────────────────
@@ -83,10 +83,9 @@ def retrieve_context(query: str, openai_key: str, pinecone_key: str) -> tuple[st
         chunks  = []
         sources = []
         for match in results.matches:
-            if match.score > 0.70:  # Only use high-confidence matches
+            if match.score > 0.50:  # Lowered threshold for better recall
                 chunks.append(match.metadata.get("text", ""))
                 source = match.metadata.get("source", "Unknown source")
-                chunk_num = match.metadata.get("chunk", "?")
                 if source not in sources:
                     sources.append(source)
 
